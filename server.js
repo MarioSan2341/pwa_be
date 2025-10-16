@@ -1,7 +1,8 @@
-import express from 'express';
-import mongoose from 'mongoose';
-import cors from 'cors';
-import dotenv from 'dotenv';
+import express from "express";
+import mongoose from "mongoose";
+import cors from "cors";
+import dotenv from "dotenv";
+import webpush from "web-push";
 
 dotenv.config();
 
@@ -11,21 +12,30 @@ const PORT = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
-// Conexión a MongoDB
-mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log('Conectado a MongoDB'))
-  .catch((err) => console.log('Error al conectar a MongoDB:', err));
+// --------------------
+// 🔗 Conexión a MongoDB
+// --------------------
+mongoose
+  .connect(process.env.MONGO_URI)
+  .then(() => console.log("✅ Conectado a MongoDB"))
+  .catch((err) => console.error("❌ Error al conectar a MongoDB:", err));
 
-// Modelo de usuario usando la colección "usuarios"
+// --------------------
+// 🧩 Modelo de Usuario
+// --------------------
 const userSchema = new mongoose.Schema({
   username: String,
-  password: String
+  password: String,
 });
 
-const User = mongoose.model('User', userSchema, 'usuarios');
+const User = mongoose.model("User", userSchema, "usuarios");
 
-// Ruta de login
-app.post('/login', async (req, res) => {
+// --------------------
+// 🔐 Rutas de autenticación
+// --------------------
+
+// Login
+app.post("/login", async (req, res) => {
   const { username, password } = req.body;
 
   try {
@@ -33,138 +43,84 @@ app.post('/login', async (req, res) => {
     if (user) {
       res.json({ success: true, username: user.username });
     } else {
-      res.json({ success: false, message: 'Usuario o contraseña incorrectos' });
+      res.json({ success: false, message: "Usuario o contraseña incorrectos" });
     }
-  } catch {
-    res.status(500).json({ success: false, message: 'Error del servidor' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Error del servidor" });
   }
 });
 
-// Ruta de registro
-app.post('/register', async (req, res) => {
+// Registro
+app.post("/register", async (req, res) => {
   const { username, password } = req.body;
 
   try {
-    // Verificar si ya existe el usuario
     const existingUser = await User.findOne({ username });
     if (existingUser) {
-      return res.json({ success: false, message: 'El usuario ya existe' });
+      return res.json({ success: false, message: "El usuario ya existe" });
     }
 
-    // Crear nuevo usuario
     const newUser = new User({ username, password });
     await newUser.save();
 
     res.json({ success: true, username: newUser.username });
-  } catch {
-    res.status(500).json({ success: false, message: 'Error del servidor' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Error del servidor" });
   }
 });
 
-// -----------------------------
-// IndexedDB Helper
-// -----------------------------
-function openDB() {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open("pwa-db", 1);
-    request.onupgradeneeded = (event) => {
-      const db = event.target.result;
-      if (!db.objectStoreNames.contains("pending-posts")) {
-        db.createObjectStore("pending-posts", { keyPath: "id", autoIncrement: true });
-      }
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
+// --------------------
+// 🔔 Configuración de Push Notifications
+// --------------------
+
+// Configurar claves VAPID desde .env
+webpush.setVapidDetails(
+  process.env.VAPID_EMAIL,
+  process.env.VAPID_PUBLIC_KEY,
+  process.env.VAPID_PRIVATE_KEY
+);
+
+// Arreglo temporal para guardar suscripciones
+// (Luego puedes guardarlas en Mongo si quieres persistencia)
+let subscriptions = [];
+
+// Guardar suscripción (desde el frontend)
+app.post("/subscribe", (req, res) => {
+  const subscription = req.body;
+  subscriptions.push(subscription);
+  console.log("✅ Nueva suscripción:", subscription);
+  res.status(201).json({ message: "Suscripción guardada correctamente" });
+});
+
+// Enviar notificación push
+app.post("/sendNotification", async (req, res) => {
+  const { title, message } = req.body;
+
+  const payload = JSON.stringify({
+    title: title || "Notificación desde el servidor 🚀",
+    message: message || "Hola 👋 Esto es una notificación push desde el backend",
   });
-}
 
-async function savePostRequest(data) {
-  const db = await openDB();
-  const tx = db.transaction("pending-posts", "readwrite");
-  tx.objectStore("pending-posts").add(data);
-  return tx.complete;
-}
+  const sendPromises = subscriptions.map((sub) =>
+    webpush.sendNotification(sub, payload).catch((err) => {
+      console.error("❌ Error enviando notificación:", err);
+    })
+  );
 
-async function getPendingPosts() {
-  const db = await openDB();
-  const tx = db.transaction("pending-posts", "readonly");
-  return tx.objectStore("pending-posts").getAll();
-}
-
-async function clearPost(id) {
-  const db = await openDB();
-  const tx = db.transaction("pending-posts", "readwrite");
-  tx.objectStore("pending-posts").delete(id);
-  return tx.complete;
-}
-
-// -----------------------------
-// Interceptar POST fallidos
-// -----------------------------
-self.addEventListener("fetch", (event) => {
-  const req = event.request;
-
-  if (req.method === "POST") {
-    event.respondWith(
-      fetch(req.clone()).catch(async (err) => {
-        console.log("[SW] POST falló, guardando en IndexedDB...");
-        const cloned = await req.clone().json().catch(() => null);
-        if (cloned) {
-          await savePostRequest({
-            url: req.url,
-            body: cloned,
-            timestamp: Date.now(),
-          });
-
-          // Registrar la sincronización
-          if (self.registration.sync) {
-            await self.registration.sync.register("sync-posts");
-            console.log("[SW] Background Sync registrado.");
-          }
-        }
-
-        // Respuesta offline temporal
-        return new Response(
-          JSON.stringify({ message: "Sin conexión. Se guardó localmente." }),
-          { headers: { "Content-Type": "application/json" } }
-        );
-      })
-    );
-  }
+  await Promise.all(sendPromises);
+  res.json({ message: "📨 Notificaciones enviadas correctamente" });
 });
 
-// -----------------------------
-// Evento de sincronización
-// -----------------------------
-self.addEventListener("sync", async (event) => {
-  if (event.tag === "sync-posts") {
-    console.log("[SW] Intentando reenviar POST pendientes...");
-    event.waitUntil(
-      (async () => {
-        const posts = await getPendingPosts();
-        for (const post of posts) {
-          try {
-            const res = await fetch(post.url, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(post.body),
-            });
-            if (res.ok) {
-              console.log("[SW] POST reenviado correctamente:", post.url);
-              await clearPost(post.id);
-            } else {
-              console.warn("[SW] Error al reenviar:", post.url);
-            }
-          } catch (err) {
-            console.error("[SW] No hay conexión todavía:", err);
-          }
-        }
-      })()
-    );
-  }
+// --------------------
+// 🧠 Ruta raíz de prueba
+// --------------------
+app.get("/", (req, res) => {
+  res.send("Servidor de notificaciones Push activo ✅");
 });
 
-
-
-
-app.listen(PORT, () => console.log(`Servidor corriendo en puerto ${PORT}`));
+// --------------------
+// 🚀 Iniciar servidor
+// --------------------
+app.listen(PORT, () =>
+  console.log(`Servidor corriendo en http://localhost:${PORT}`)
+);
