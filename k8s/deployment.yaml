@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pwa-be-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pwa-be
+  template:
+    metadata:
+      labels:
+        app: pwa-be
+    spec:
+      containers:
+        - name: pwa-be
+          image: pwa_be:v1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5000

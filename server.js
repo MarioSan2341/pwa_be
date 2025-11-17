@@ -80,35 +80,54 @@ webpush.setVapidDetails(
   process.env.VAPID_PRIVATE_KEY
 );
 
+// --------------------
 // Arreglo temporal para guardar suscripciones
-// (Luego puedes guardarlas en Mongo si quieres persistencia)
+// --------------------
 let subscriptions = [];
 
-// Guardar suscripción (desde el frontend)
+// --------------------
+// Guardar suscripción (desde frontend)
+// --------------------
 app.post("/subscribe", (req, res) => {
   const subscription = req.body;
-  subscriptions.push(subscription);
-  console.log("✅ Nueva suscripción:", subscription);
+
+  if (!subscription || !subscription.endpoint) {
+    return res.status(400).json({ message: "Suscripción inválida" });
+  }
+
+  // Evitar duplicados
+  const exists = subscriptions.find((sub) => sub.endpoint === subscription.endpoint);
+  if (!exists) {
+    subscriptions.push(subscription);
+    console.log("✅ Nueva suscripción guardada:", subscription.endpoint);
+  } else {
+    console.log("ℹ️ Suscripción ya existente:", subscription.endpoint);
+  }
+
   res.status(201).json({ message: "Suscripción guardada correctamente" });
 });
 
+
+// --------------------
 // Enviar notificación push
+// --------------------
 app.post("/sendNotification", async (req, res) => {
   const { title, message } = req.body;
 
-  const payload = JSON.stringify({
-    title: title || "Notificación desde el servidor 🚀",
-    message: message || "Hola 👋 Esto es una notificación push desde el backend",
-  });
+  if (!subscriptions.length) {
+    return res.status(400).json({ message: "No hay suscripciones válidas" });
+  }
 
-  const sendPromises = subscriptions.map((sub) =>
-    webpush.sendNotification(sub, payload).catch((err) => {
+  const payload = JSON.stringify({ title, body: message });
+
+  const sendPromises = subscriptions.map(sub =>
+    webpush.sendNotification(sub, payload).catch(err => {
       console.error("❌ Error enviando notificación:", err);
     })
   );
 
   await Promise.all(sendPromises);
-  res.json({ message: "📨 Notificaciones enviadas correctamente" });
+  res.json({ message: "📨 Notificación enviada" });
 });
 
 // --------------------
