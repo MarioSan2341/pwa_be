@@ -126,34 +126,24 @@ let subscriptions = [];
 // --------------------
 // Guardar suscripción (desde frontend)
 // --------------------
-app.post("/subscribe", async (req, res) => {
+app.post("/subscribe", (req, res) => {
   const { username, subscription } = req.body;
 
-  if (!username || !subscription || !subscription.endpoint) {
-    return res.status(400).json({ message: "username y subscription obligatorios" });
+  if (!subscription || !subscription.endpoint) {
+    return res.status(400).json({ message: "Suscripción inválida" });
   }
 
-  try {
-    // Buscar usuario
-    const user = await User.findOne({ username });
-    if (!user) return res.status(404).json({ message: "Usuario no encontrado" });
+  // Evitar duplicados por endpoint
+  const exists = subscriptions.find(sub => sub.subscription.endpoint === subscription.endpoint);
 
-    // Evitar duplicados por endpoint
-    const exists = user.subscriptions.some(s => s.endpoint === subscription.endpoint);
-    if (!exists) {
-      user.subscriptions.push(subscription);
-      await user.save();
-      console.log("✅ Subscription Guardada para", username, subscription.endpoint);
-    } else {
-      console.log("ℹ️ Subscription ya existente para", username);
-    }
-
-    res.status(201).json({ message: "Suscripción guardada" });
-  } catch (err) {
-    console.error("Error en /subscribe:", err);
-    res.status(500).json({ message: "Error servidor" });
+  if (!exists) {
+    subscriptions.push({ username, subscription });
+    console.log(`👤 Nueva suscripción para ${username}`);
   }
+
+  res.status(201).json({ message: "Suscripción guardada" });
 });
+
 
 
 
@@ -182,6 +172,45 @@ app.post("/sendNotification", async (req, res) => {
   } catch (err) {
     console.error("Error en /sendNotification:", err);
     res.status(500).json({ message: "Error servidor" });
+  }
+});
+
+app.post("/sendWelcome", async (req, res) => {
+  const { username } = req.body;
+
+  let userSubs = subscriptions.filter(s => s.username === username);
+
+  if (!userSubs.length) {
+    return res.status(400).json({ message: "El usuario no tiene suscripciones" });
+  }
+
+  const payload = JSON.stringify({
+    title: `¡Bienvenido ${username}! 🎉`,
+    body: "Gracias por iniciar sesión. Tu PWA está lista para usarse.",
+  });
+
+  try {
+    const results = await Promise.all(
+      userSubs.map(sub => 
+        webpush.sendNotification(sub.subscription, payload)
+          .then(() => ({ ok: true, sub }))
+          .catch(err => {
+            console.error("❌ Suscripción inválida, se eliminará:", err);
+
+            return { ok: false, sub };
+          })
+      )
+    );
+
+    // 🔥 BORRAR SUSCRIPCIONES INVÁLIDAS
+    subscriptions = subscriptions.filter(s =>
+      results.some(r => r.ok && r.sub === s)
+    );
+
+    res.json({ success: true });
+
+  } catch (err) {
+    res.status(500).json({ message: "Error enviando bienvenida" });
   }
 });
 
