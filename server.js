@@ -3,6 +3,9 @@ import mongoose from "mongoose";
 import cors from "cors";
 import dotenv from "dotenv";
 import webpush from "web-push";
+import Catalog from "./models/Catalog.js";
+
+
 
 dotenv.config();
 
@@ -26,18 +29,37 @@ mongoose
 const userSchema = new mongoose.Schema({
   username: { type: String, required: true, unique: true },
   password: String,
+
+  // 🔔 Notificaciones push (lo que ya tenías)
   subscriptions: {
     type: [
       {
         endpoint: String,
         keys: Object,
-        // puedes añadir más meta si quieres (userAgent, createdAt, etc.)
-        createdAt: { type: Date, default: Date.now },
+        createdAt: { type: Date, default: Date.now }
+      }
+    ],
+    default: []
+  },
+
+  // 🛒 Número total de compras
+  purchasesCount: {
+    type: Number,
+    default: 0
+  },
+
+  // 📦 Historial de compras (cada compra con fecha y total)
+  purchases: {
+    type: [
+      {
+        date: { type: Date, default: Date.now },
+        total: Number
       }
     ],
     default: []
   }
 });
+
 
 
 const User = mongoose.model("User", userSchema, "usuarios");
@@ -251,6 +273,46 @@ app.post("/sendToUser", async (req, res) => {
     res.status(500).json({ message: "Error servidor" });
   }
 });
+
+
+// Obtener todos los catálogos
+app.get("/catalogs", async (req, res) => {
+  try {
+    const catalogs = await Catalog.find();
+    res.json(catalogs);
+  } catch (err) {
+    res.status(500).json({ message: "Error obteniendo catálogos" });
+  }
+});
+
+app.post("/buy", async (req, res) => {
+  const { username, items } = req.body;
+
+  if (!username || !items || !items.length) {
+    return res.status(400).json({ success: false, message: "Datos incompletos" });
+  }
+
+  try {
+    const user = await User.findOne({ username });
+    if (!user) {
+      return res.status(404).json({ success: false, message: "Usuario no encontrado" });
+    }
+
+    // Calcular total
+    const total = items.reduce((acc, item) => acc + (item.product.price || 0), 0);
+
+    user.purchasesCount++;
+    user.purchases.push({ total });
+
+    await user.save();
+
+    return res.json({ success: true, message: "Compra registrada" });
+  } catch (err) {
+    console.error("Error en /buy:", err);
+    res.status(500).json({ success: false, message: "Error en el servidor" });
+  }
+});
+
 
 
 // --------------------
